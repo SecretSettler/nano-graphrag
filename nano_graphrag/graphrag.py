@@ -24,6 +24,7 @@ from ._op import (
     local_query,
     global_query,
     naive_query,
+    batch_local_query
 )
 from ._storage import (
     JsonKVStorage,
@@ -209,6 +210,20 @@ class GraphRAG:
     def query(self, query: str, param: QueryParam = QueryParam()):
         loop = always_get_an_event_loop()
         return loop.run_until_complete(self.aquery(query, param))
+
+    def batch_query(self, query: List[str], param: QueryParam = QueryParam()):
+        if param.mode != "local":
+            raise NotImplementedError("Batch query only support local mode")
+        response = batch_local_query(
+            query,
+            self.chunk_entity_relation_graph,
+            self.entities_vdb,
+            self.community_reports,
+            self.text_chunks,
+            param,
+            asdict(self),
+        )
+        return response
 
     async def aquery(self, query: str, param: QueryParam = QueryParam()):
         if param.mode == "local" and not self.enable_local:

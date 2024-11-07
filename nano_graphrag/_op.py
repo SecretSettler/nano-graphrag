@@ -16,6 +16,7 @@ from ._utils import (
     pack_user_ass_to_openai_messages,
     split_string_by_multi_markers,
     truncate_list_by_token_size,
+    always_get_an_event_loop
 )
 from .base import (
     BaseGraphStorage,
@@ -27,6 +28,7 @@ from .base import (
     QueryParam,
 )
 from .prompt import GRAPH_FIELD_SEP, PROMPTS
+import time
 
 
 def chunking_by_token_size(
@@ -1103,4 +1105,69 @@ async def naive_query(
         query,
         system_prompt=sys_prompt,
     )
+    return response
+
+def num_tokens(text: str, token_encoder: tiktoken.Encoding | None = None) -> int:
+    """Return the number of tokens in the given text."""
+    if token_encoder is None:
+        token_encoder = tiktoken.get_encoding("cl100k_base")
+    return len(token_encoder.encode(text))
+
+def batch_local_query(
+    query: list[str],
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    community_reports: BaseKVStorage[CommunitySchema],
+    text_chunks_db: BaseKVStorage[TextChunkSchema],
+    query_param: QueryParam,
+    global_config: dict,
+) -> list[str]:
+    use_model_func = global_config["best_model_func"]
+    tic = time.time()
+    loop = always_get_an_event_loop()
+    batch_context = loop.run_until_complete(
+        asyncio.gather(
+            *[
+                _build_local_query_context(
+                    q,
+                    knowledge_graph_inst,
+                    entities_vdb,
+                    community_reports,
+                    text_chunks_db,
+                    query_param,
+                )
+                for q in query
+            ]
+        )
+    )
+    print(f"Build context time: {time.time()-tic:.2f}s")
+    for c in batch_context:
+        print(f"Context length: {num_tokens(c)} tokens")
+        assert num_tokens(c) < global_config["best_model_max_token_size"]
+
+    if query_param.only_need_context:
+        return batch_context
+    for i, context in enumerate(batch_context):
+        if context is None:
+            batch_context[i] = PROMPTS["fail_response"]
+
+    tic = time.time()
+    batch_sys_prompt = []
+    for context in batch_context:
+        sys_prompt_temp = PROMPTS["local_rag_response"]
+        sys_prompt = sys_prompt_temp.format(
+            context_data=context, response_type=query_param.response_type
+        )
+        batch_sys_prompt.append(sys_prompt)
+    print(f"Form prompt time: {time.time()-tic:.2f}s")
+
+    tic = time.time()
+    loop = always_get_an_event_loop()
+    response = loop.run_until_complete(
+        use_model_func(
+            query,
+            system_prompt=batch_sys_prompt,
+        )
+    )
+    print(f"LLM generate time: {time.time()-tic:.2f}s")
     return response
