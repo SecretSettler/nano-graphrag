@@ -8,7 +8,6 @@ from vllm import LLM, SamplingParams
 from typing import List
 import asyncio
 import json
-from sentence_transformers import SentenceTransformer
 
 logging.basicConfig(level=logging.WARNING)
 logging.getLogger("nano-graphrag").setLevel(logging.INFO)
